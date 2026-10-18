@@ -23,6 +23,7 @@ import io
 import json
 import os
 import re
+import subprocess
 import sys
 import tempfile
 
@@ -611,6 +612,31 @@ def selftest():
         else:
             raise AssertionError(bad)
     assert _rule_list("passive-voice,present-perfect") == {"passive-voice", "present-perfect"}
+
+    # commit-message mode: lint only author prose, preserving line numbers.
+    msg = ("Add thing; it spins up\n\nThe body is clean.\n\n"
+           "Co-Authored-By: X; who spins up <x@y.z>\n"
+           "# a comment; spin up the worker\n"
+           "# ------------------------ >8 ------------------------\n"
+           "-removed; spin up the seamless log\n")
+    prose = _commit_message_prose(msg)
+    findings, _ = lint(prose)
+    rules_by_line = {(f["line"], f["rule"]) for f in findings}
+    assert (1, "semicolon") in rules_by_line, findings          # subject linted
+    assert (1, "phrasal-verb") in rules_by_line, findings
+    assert all(f["line"] in (1,) for f in findings), findings   # trailer/comment/diff ignored
+    # auto-generated subjects are skipped entirely.
+    for subject in ("Merge branch 'x'", "Revert \"y\"", "fixup! z", "squash! z", "Reapply w"):
+        assert _commit_message_prose(subject + "; spins up\n") is None, subject
+    # warn vs strict exit codes on the same violating message.
+    with tempfile.TemporaryDirectory() as tmp:
+        mp = os.path.join(tmp, "COMMIT_EDITMSG")
+        with open(mp, "w", encoding="utf-8") as fh:
+            fh.write("Add thing; spin up the worker\n")
+        with contextlib.redirect_stdout(io.StringIO()):
+            assert main(["--commit-msg", mp]) == 0            # warn: never blocks
+            assert main(["--commit-msg", "--strict", mp]) == 1  # strict: blocks
+
     print("selftest OK")
 
 
@@ -638,6 +664,64 @@ def _non_negative_int(value):
     return n
 
 
+# --- commit-message mode -------------------------------------------------
+# A commit-msg hook is handed the path to the message file. At that stage the
+# file still holds git comment lines, a possible verbose diff below the
+# scissors line, and a trailing trailer block. We lint only the author prose.
+# The commit-msg stage passes no commit-source argument, so auto-generated
+# messages (merge/revert/fixup/...) are detected by their subject prefix.
+AUTOGEN_SUBJECT = re.compile(r"^(Merge |Revert |Reapply |fixup! |squash! )")
+TRAILER_LINE = re.compile(r"^[A-Za-z][A-Za-z0-9-]*:\s")
+
+
+def _git_comment_char():
+    """git's core.commentChar (default '#'); fall back to '#' for 'auto'/unset."""
+    try:
+        out = subprocess.run(
+            ["git", "config", "--get", "core.commentChar"],
+            capture_output=True, text=True,
+        )
+    except (OSError, ValueError):
+        return "#"
+    value = out.stdout.strip()
+    return value if len(value) == 1 else "#"
+
+
+def _commit_message_prose(text, comment_char="#"):
+    """Reduce a raw commit-message file to author prose, preserving line numbers.
+
+    Lines that are dropped (comments, verbose diff, trailers) are blanked rather
+    than removed, so findings keep the message's real line numbers. Returns None
+    when the message is auto-generated, signalling that nothing should be linted.
+    """
+    lines = text.splitlines()
+    # 1. Cut the verbose diff: a comment line carrying the ">8" scissors marker
+    #    and everything after it.
+    kept = []
+    for line in lines:
+        if line.startswith(comment_char) and ">8" in line:
+            break
+        kept.append(line)
+    # 2. Blank out git comment lines (git itself strips these before recording).
+    kept = ["" if ln.startswith(comment_char) else ln for ln in kept]
+    # 3. Subject is the first non-blank line; skip auto-generated messages.
+    subject = next((ln for ln in kept if ln.strip()), "")
+    if AUTOGEN_SUBJECT.match(subject):
+        return None
+    # 4. Blank the trailing trailer block (contiguous "Key: value" lines at the
+    #    end, set off by a blank line) so trailers are not linted as prose.
+    end = len(kept)
+    while end > 0 and not kept[end - 1].strip():
+        end -= 1
+    start = end
+    while start > 0 and TRAILER_LINE.match(kept[start - 1]):
+        start -= 1
+    if start < end and (start == 0 or not kept[start - 1].strip()):
+        for j in range(start, end):
+            kept[j] = ""
+    return "\n".join(kept)
+
+
 def main(argv=None):
     # argv defaults to the process args so the console entry point (ste-lint),
     # which calls main() with no arguments, behaves like `python ste_lint.py`.
@@ -654,12 +738,34 @@ def main(argv=None):
     parser.add_argument("--disable", type=_rule_list, default=set(), metavar="RULES",
                         help="comma-separated rule IDs to silence")
     parser.add_argument("--selftest", action="store_true", help="run the built-in tests")
+    parser.add_argument("--commit-msg", action="store_true", dest="commit_msg",
+                        help="treat input as a git commit-message file "
+                             "(lint only the author prose; skip auto-generated messages)")
+    parser.add_argument("--strict", action="store_true",
+                        help="in --commit-msg mode, fail (non-zero) on violations; "
+                             "without it, commit-msg mode only warns")
     # intermixed parsing keeps flags valid between file paths
     args = parser.parse_intermixed_args(argv)
     if args.selftest:
         selftest()
         return 0
     as_json, baseline, disabled, paths = args.json, args.baseline, args.disable, args.paths
+
+    if args.commit_msg:
+        path = paths[0] if paths else "<stdin>"
+        try:
+            text = open(paths[0], encoding="utf-8").read() if paths else sys.stdin.read()
+        except OSError as e:
+            parser.error(f"cannot read {path}: {e.strerror}")
+        prose = _commit_message_prose(text, _git_comment_char())
+        if prose is None:
+            return 0  # auto-generated message: lint nothing, do not block
+        findings, words_total = lint(prose, filename=path)
+        findings = [f for f in findings if f["rule"] not in disabled]
+        hard_count = sum(1 for f in findings if f["level"] == "advisory-free")
+        report(findings, words_total, as_json, hard_count, baseline)
+        # warn by default (exit 0); only --strict blocks the commit
+        return 1 if (args.strict and hard_count > baseline) else 0
 
     findings, words_total = [], 0
     if paths:

@@ -90,6 +90,32 @@ Then run `pre-commit install` (and `pre-commit run --all-files` to check existin
         args: [--baseline, '20']
   ```
 
+### Linting commit messages
+
+A second hook, `ste-lint-commit-msg`, checks the commit message itself. It runs at pre-commit's `commit-msg` stage, so install that stage once:
+
+```yaml
+repos:
+  - repo: https://github.com/danyuchn/asd-ste100-skill
+    rev: v0.1.0
+    hooks:
+      - id: ste-lint-commit-msg
+```
+
+```bash
+pre-commit install --hook-type commit-msg
+```
+
+- **Warns by default.** The hook prints findings but does not block the commit. The hook sets `verbose: true` so the warnings show even though pre-commit marks it `Passed`.
+- **Opt in to blocking.** To abort a commit on a violation, add the `--strict` flag:
+
+  ```yaml
+      - id: ste-lint-commit-msg
+        args: [--commit-msg, --strict]
+  ```
+- **Lints only your prose.** The hook reads only the subject and body. It ignores git comment lines, the verbose diff below the scissors line, and the trailer block (`Co-Authored-By:`, `Signed-off-by:`).
+- **Skips auto-generated messages.** The hook ignores merge, revert, reapply, fixup, and squash messages, so routine merges never fail.
+
 ## Usage
 
 Trigger with a request to simplify or clarify English text:

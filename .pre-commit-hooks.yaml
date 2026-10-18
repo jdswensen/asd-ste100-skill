@@ -9,3 +9,17 @@
   # Default to Markdown: the rules target English prose, not source code.
   # Consumers widen or narrow this with their own `types:`/`files:`.
   types: [markdown]
+
+- id: ste-lint-commit-msg
+  name: ASD-STE100 commit-message lint
+  description: Lint the commit message for the structural STE rules (warns by default).
+  entry: ste-lint
+  language: python
+  args: [--commit-msg]
+  stages: [commit-msg]
+  # verbose so warn-mode findings are shown: pre-commit hides a passing hook's
+  # output, and warn mode exits 0, so without this the warnings are invisible.
+  verbose: true
+  # Warns by default (prints findings, never blocks). To block commits on a
+  # violation, add `args: [--commit-msg, --strict]` in .pre-commit-config.yaml.
+  # Install with: pre-commit install --hook-type commit-msg
