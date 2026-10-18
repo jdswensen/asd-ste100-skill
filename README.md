@@ -116,6 +116,23 @@ pre-commit install --hook-type commit-msg
 - **Lints only your prose.** The hook reads only the subject and body. It ignores git comment lines, the verbose diff below the scissors line, and the trailer block (`Co-Authored-By:`, `Signed-off-by:`).
 - **Skips auto-generated messages.** The hook ignores merge, revert, reapply, fixup, and squash messages, so routine merges never fail.
 
+### Linting comments in source files
+
+A third hook, `ste-lint-comments`, lints only the comments and doc-strings of source files and ignores the code:
+
+```yaml
+repos:
+  - repo: https://github.com/danyuchn/asd-ste100-skill
+    rev: v0.1.0
+    hooks:
+      - id: ste-lint-comments
+```
+
+- **Needs one extra dependency.** This hook uses [Pygments](https://pygments.org/) to find comments. pre-commit installs it into the hook's own environment, so the other hooks and the base install stay dependency-free. To run the mode outside pre-commit, install `ste-lint[comments]`.
+- **Supported languages (v1):** Python, Rust, C, C++, JavaScript, TypeScript, Go, shell, YAML, Ruby, and Java. The hook skips a file whose language is outside this set, so it never lints code as prose.
+- **Doc-comments keep their Markdown.** The hook lints Rust `///` doc-comments through the Markdown-aware path, so a fenced code block inside a doc-comment stays skipped.
+- **Known limits.** Comments can hold text the prose rules were not written for — commented-out code, license headers, URLs, and tag markup such as `@param`. Scope the hook with your own `files:` if a file produces noise.
+
 ## Usage
 
 Trigger with a request to simplify or clarify English text:

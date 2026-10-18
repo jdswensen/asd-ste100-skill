@@ -23,3 +23,16 @@
   # Warns by default (prints findings, never blocks). To block commits on a
   # violation, add `args: [--commit-msg, --strict]` in .pre-commit-config.yaml.
   # Install with: pre-commit install --hook-type commit-msg
+
+- id: ste-lint-comments
+  name: ASD-STE100 comment lint
+  description: Lint only the comments and doc-strings of source files.
+  entry: ste-lint
+  language: python
+  args: [--comments]
+  # Pygments is needed only for this hook; the base install stays stdlib-only.
+  additional_dependencies: [pygments]
+  # Default to the v1 supported source extensions. The linter also skips any
+  # unsupported file, so a stray match is harmless. Override with your own
+  # `files:`/`types:` to narrow or widen the set.
+  files: \.(py|rs|c|cc|cpp|cxx|h|hpp|js|ts|go|sh|bash|zsh|ya?ml|rb|java)$

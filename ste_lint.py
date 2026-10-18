@@ -637,6 +637,35 @@ def selftest():
             assert main(["--commit-msg", mp]) == 0            # warn: never blocks
             assert main(["--commit-msg", "--strict", mp]) == 1  # strict: blocks
 
+    # comment-extraction mode: only assert when the optional dependency is present,
+    # so the self-test still passes on a stdlib-only install.
+    try:
+        import pygments  # noqa: F401
+        have_pygments = True
+    except ImportError:
+        have_pygments = False
+    if have_pygments:
+        rs = ("fn main() {\n"
+              "    let a = 1; let b = 2;\n"           # code: must be ignored
+              "    f(); // spin up; perform an analysis\n"  # comment: linted
+              "}\n"
+              "/// Doc. Example:\n"
+              "///\n"
+              "/// ```\n"
+              "/// let z = 1; spin_up();\n"           # fenced in a doc-comment: skipped
+              "/// ```\n")
+        prose = _source_comment_prose(rs, "sample.rs")
+        pos = {(f["line"], f["rule"]) for f in lint(prose, filename="sample.rs")[0]}
+        assert (3, "phrasal-verb") in pos, pos       # trailing comment linted
+        assert (3, "semicolon") in pos, pos
+        assert all(line == 3 for line, _ in pos), pos  # code + fenced block ignored
+        try:
+            _source_comment_prose("-- x\n", "sample.hs")  # not in v1 set
+        except _UnsupportedSource:
+            pass
+        else:
+            raise AssertionError("expected _UnsupportedSource for .hs")
+
     print("selftest OK")
 
 
@@ -722,6 +751,76 @@ def _commit_message_prose(text, comment_char="#"):
     return "\n".join(kept)
 
 
+# --- comment-extraction mode --------------------------------------------
+# Lint only the comments and doc-strings of a source file, never its code.
+# Pygments (optional dependency) maps a file name to a lexer and tags Comment
+# and String.Doc tokens. We blank every non-comment character to spaces and
+# keep newlines, so findings keep the source's true line AND column.
+# v1 supports a named set of languages; anything else is reported as
+# unsupported rather than linted as raw prose.
+SUPPORTED_COMMENT_ALIASES = frozenset({
+    "python", "py", "python3",
+    "rust", "rs",
+    "c", "cpp", "c++",
+    "javascript", "js", "typescript", "ts",
+    "go", "golang",
+    "bash", "sh", "shell", "zsh",
+    "yaml",
+    "ruby", "rb",
+    "java",
+})
+# A run of comment-delimiter punctuation at the start of a line. Blanking it
+# (not deleting it) exposes Markdown structure (e.g. a ``` fence inside a
+# Rust /// doc-comment) to the Markdown-aware lint path while keeping columns.
+_COMMENT_LEAD = re.compile(r"^[ \t]*([/#!*]+)")
+
+
+class _PygmentsMissing(Exception):
+    """Raised when --comments is used but Pygments is not installed."""
+
+
+class _UnsupportedSource(Exception):
+    """Raised when a file's language is outside the v1 supported set."""
+
+
+def _source_comment_prose(text, path):
+    """Return source text with only comments/doc-strings kept (code blanked).
+
+    Non-comment characters become spaces and newlines are preserved, so the
+    result lints at the original line and column. Raises _PygmentsMissing if
+    Pygments is absent and _UnsupportedSource for an out-of-scope language.
+    """
+    try:
+        from pygments.lexers import get_lexer_for_filename
+        from pygments.token import Comment, String
+        from pygments.util import ClassNotFound
+    except ImportError as e:
+        raise _PygmentsMissing from e
+    try:
+        lexer = get_lexer_for_filename(path)
+    except ClassNotFound as e:
+        raise _UnsupportedSource(path) from e
+    if not (set(lexer.aliases) & SUPPORTED_COMMENT_ALIASES):
+        raise _UnsupportedSource(path)
+    out = []
+    for ttype, value in lexer.get_tokens(text):
+        if ttype in Comment or ttype in String.Doc:
+            out.append(value)
+        else:
+            out.append(re.sub(r"[^\n]", " ", value))
+    masked = "".join(out)
+    # Blank the comment-delimiter lead on each line so doc-comment Markdown
+    # (fences) reaches the Markdown-aware path; columns stay aligned.
+    lines = []
+    for line in masked.split("\n"):
+        m = _COMMENT_LEAD.match(line)
+        if m:
+            s, e = m.span(1)
+            line = line[:s] + " " * (e - s) + line[e:]
+        lines.append(line)
+    return "\n".join(lines)
+
+
 def main(argv=None):
     # argv defaults to the process args so the console entry point (ste-lint),
     # which calls main() with no arguments, behaves like `python ste_lint.py`.
@@ -744,12 +843,43 @@ def main(argv=None):
     parser.add_argument("--strict", action="store_true",
                         help="in --commit-msg mode, fail (non-zero) on violations; "
                              "without it, commit-msg mode only warns")
+    parser.add_argument("--comments", action="store_true",
+                        help="lint only the comments and doc-strings of source "
+                             "files (needs the 'comments' extra: pygments)")
     # intermixed parsing keeps flags valid between file paths
     args = parser.parse_intermixed_args(argv)
     if args.selftest:
         selftest()
         return 0
     as_json, baseline, disabled, paths = args.json, args.baseline, args.disable, args.paths
+
+    if args.comments:
+        if not paths:
+            parser.error("--comments needs one or more FILE paths (no stdin: the "
+                         "language is detected from the file name)")
+        findings, words_total = [], 0
+        for p in paths:
+            try:
+                text = open(p, encoding="utf-8").read()
+            except OSError as e:
+                parser.error(f"cannot read {p}: {e.strerror}")
+            try:
+                prose = _source_comment_prose(text, p)
+            except _PygmentsMissing:
+                parser.error("--comments needs Pygments. Install the extra: "
+                             "pip install 'ste-lint[comments]'")
+            except _UnsupportedSource:
+                # predictable handling: skip, with a clear note to stderr
+                print(f"{p}: skipped (unsupported language for --comments)",
+                      file=sys.stderr)
+                continue
+            f, w = lint(prose, filename=p)
+            findings.extend(f)
+            words_total += w
+        findings = [f for f in findings if f["rule"] not in disabled]
+        hard_count = sum(1 for f in findings if f["level"] == "advisory-free")
+        report(findings, words_total, as_json, hard_count, baseline)
+        return 1 if hard_count > baseline else 0
 
     if args.commit_msg:
         path = paths[0] if paths else "<stdin>"
