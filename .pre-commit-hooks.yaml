@@ -1,0 +1,10 @@
+- id: ste-lint
+  name: ASD-STE100 structural lint
+  description: Lint text for the structural Simplified Technical English rules.
+  entry: ste-lint
+  language: python
+  # Strict by default: fail on any hard violation. Consumers can loosen with
+  # `args: [--baseline, 'N']` in their own .pre-commit-config.yaml.
+  args: [--baseline, '0']
+  # No `types`/`files` filter on purpose: the consumer scopes which files the
+  # hook receives (e.g. `files: \.md$`). See the README for guidance.
