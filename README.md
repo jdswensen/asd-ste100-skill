@@ -77,18 +77,16 @@ repos:
     rev: v0.1.0        # pin a released git tag (see the repo's tags)
     hooks:
       - id: ste-lint
-        files: \.md$   # see the note below — set your own file scope
 ```
 
 Then run `pre-commit install` (and `pre-commit run --all-files` to check existing files). pre-commit builds an isolated environment from this repo and installs the `ste-lint` command, so you never reference the script's path.
 
 - **`rev:` pins a git tag.** Point it at a released tag from this repo (for example `v0.1.0`), not a branch. A tag is immutable, so the hook stays reproducible. You can pin a commit SHA if you need a revision that has no tag.
-- **Set your own `files:` scope — strongly recommended.** The hook ships with **no** file-type filter. Without a `files:` (or `types:`) key it runs on every staged file, including source code. Its rules target English prose, not code, so scope it to the text you want linted, such as `files: \.md$`.
+- **Markdown by default.** The hook ships with `types: [markdown]`, because its rules target English prose, not source code. To change what it lints, set your own `types:` or `files:` — for example `files: \.(md|txt)$` to add plain text, or a narrower `files:` to target specific docs.
 - **Strict by default.** The hook runs with `--baseline 0`, so any hard violation fails the commit. To tolerate a number of hard violations (useful when adopting on existing docs), override the args:
 
   ```yaml
       - id: ste-lint
-        files: \.md$
         args: [--baseline, '20']
   ```
 

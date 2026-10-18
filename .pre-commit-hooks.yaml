@@ -6,5 +6,6 @@
   # Strict by default: fail on any hard violation. Consumers can loosen with
   # `args: [--baseline, 'N']` in their own .pre-commit-config.yaml.
   args: [--baseline, '0']
-  # No `types`/`files` filter on purpose: the consumer scopes which files the
-  # hook receives (e.g. `files: \.md$`). See the README for guidance.
+  # Default to Markdown: the rules target English prose, not source code.
+  # Consumers widen or narrow this with their own `types:`/`files:`.
+  types: [markdown]
